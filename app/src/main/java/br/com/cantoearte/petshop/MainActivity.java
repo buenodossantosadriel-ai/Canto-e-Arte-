@@ -2,6 +2,9 @@ package br.com.cantoearte.petshop;
 
 import android.app.*;
 import android.os.Bundle;
+import android.os.Build;
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.view.Gravity;
@@ -22,8 +25,15 @@ public class MainActivity extends Activity {
     @Override public void onCreate(Bundle b) {
         super.onCreate(b);
         db = new LocalDb(this);
+        NotificationReceiver.criarCanal(this);
+        solicitarPermissaoNotificacao();
+        NotificationScheduler.agendar(this);
         montarTela();
         mostrarInicio();
+    }
+    private void solicitarPermissaoNotificacao() {
+        if(Build.VERSION.SDK_INT>=33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},90);
     }
     private void montarTela() {
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(Color.rgb(247,250,247));
@@ -57,18 +67,41 @@ public class MainActivity extends Activity {
         botao("＋ Cadastrar produto",()->formulario("Produto"));
         botao("＋ Cadastrar serviço / preço",()->formulario("Serviço"));
         botao("＋ Registrar venda",()->formulario("Venda"));
+        botao("＋ Cadastrar conta a pagar",()->formulario("Conta"));
+        botao("＋ Programar retorno de cliente",()->formulario("Retorno"));
+        botao("🔔 Configurar notificações",()->configurarNotificacoes());
         botao("Ver clientes",()->listar("Cliente"));
         botao("Ver pets",()->listar("Pet"));
         botao("Ver agenda",()->listar("Agendamento"));
         botao("Ver estoque / produtos",()->listar("Produto"));
         botao("Ver serviços e preços",()->listar("Serviço"));
         botao("Ver vendas / caixa",()->listar("Venda"));
+        botao("Ver contas a pagar",()->listar("Conta"));
+        botao("Ver retornos",()->listar("Retorno"));
         conteudo.addView(texto("Seus dados ficam salvos somente neste celular. Faça backup regularmente para evitar perdas.",13,Color.DKGRAY,false));
+    }
+    private void configurarNotificacoes() {
+        android.content.SharedPreferences p=getSharedPreferences("lembretes",MODE_PRIVATE);
+        LinearLayout box=new LinearLayout(this); box.setPadding(12,4,12,4); box.setOrientation(LinearLayout.VERTICAL);
+        CheckBox ativo=new CheckBox(this); ativo.setText("Ativar notificações automáticas"); ativo.setChecked(p.getBoolean("ativo",true)); box.addView(ativo);
+        String[] keys={"agenda","estoque","retornos","contas","resumo","vacinas"};
+        String[] labels={"Lembretes de banho e tosa","Alertas de estoque baixo","Retorno de clientes","Contas a pagar","Resumo dos compromissos pela manhã","Vacinação dos pets"};
+        CheckBox[] checks=new CheckBox[keys.length];
+        for(int x=0;x<keys.length;x++){checks[x]=new CheckBox(this);checks[x].setText(labels[x]);checks[x].setChecked(p.getBoolean(keys[x],true));box.addView(checks[x]);}
+        Button horario=new Button(this); horario.setText(String.format(Locale.getDefault(),"Horário do resumo: %02d:%02d",p.getInt("hora",8),p.getInt("minuto",0))); box.addView(horario);
+        final int[] hm={p.getInt("hora",8),p.getInt("minuto",0)};
+        horario.setOnClickListener(v->new TimePickerDialog(this,(view,h,m)->{hm[0]=h;hm[1]=m;horario.setText(String.format(Locale.getDefault(),"Horário do resumo: %02d:%02d",h,m));},hm[0],hm[1],true).show());
+        new AlertDialog.Builder(this).setTitle("Notificações automáticas").setView(box).setNegativeButton("Cancelar",null).setPositiveButton("Salvar",(d,w)->{
+            android.content.SharedPreferences.Editor e=p.edit().putBoolean("ativo",ativo.isChecked()).putInt("hora",hm[0]).putInt("minuto",hm[1]);
+            for(int x=0;x<keys.length;x++)e.putBoolean(keys[x],checks[x].isChecked()); e.apply();
+            if(ativo.isChecked())NotificationScheduler.agendar(this);else NotificationScheduler.cancelar(this);
+            toast("Preferências de notificações salvas.");
+        }).show();
     }
     private void formulario(String tipo) {
         LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(8,4,8,4);
-        EditText titulo = campo(tipo.equals("Cliente")?"Nome do cliente": tipo.equals("Pet")?"Nome do pet": tipo.equals("Produto")?"Nome do produto":tipo.equals("Serviço")?"Nome do serviço":tipo.equals("Venda")?"Descrição da venda":"Cliente / pet e serviço");
-        EditText detalhe = campo(tipo.equals("Cliente")?"Telefone e observações":tipo.equals("Pet")?"Espécie, raça, idade e nome do tutor":tipo.equals("Produto")?"Quantidade em estoque e observações":tipo.equals("Serviço")?"Descrição do serviço":tipo.equals("Venda")?"Forma de pagamento / observações":"Data, horário, telefone e observações");
+        EditText titulo = campo(tipo.equals("Cliente")?"Nome do cliente": tipo.equals("Pet")?"Nome do pet": tipo.equals("Produto")?"Nome do produto":tipo.equals("Serviço")?"Nome do serviço":tipo.equals("Venda")?"Descrição da venda":tipo.equals("Conta")?"Descrição da conta":"Cliente / pet e serviço");
+        EditText detalhe = campo(tipo.equals("Cliente")?"Telefone e observações":tipo.equals("Pet")?"Espécie, raça, idade; informe VACINA e data DD/MM/AAAA para lembrete":tipo.equals("Produto")?"Quantidade em estoque e observações":tipo.equals("Serviço")?"Descrição do serviço":tipo.equals("Venda")?"Forma de pagamento / observações":tipo.equals("Conta")?"Vencimento DD/MM/AAAA e observações":tipo.equals("Retorno")?"Data do retorno DD/MM/AAAA e horário":"Data DD/MM/AAAA, horário, telefone e observações");
         EditText valor = campo("Valor em R$ (se aplicável)"); valor.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL);
         box.addView(titulo); box.addView(detalhe); box.addView(valor);
         new AlertDialog.Builder(this).setTitle("Novo cadastro: "+tipo).setView(box).setNegativeButton("Cancelar",null).setPositiveButton("Salvar",(d,w)->{
